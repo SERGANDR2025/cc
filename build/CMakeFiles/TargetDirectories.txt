@@ -1,0 +1,3 @@
+C:/CryptoWebSocket/build/CMakeFiles/CryptoWebSocket.dir
+C:/CryptoWebSocket/build/CMakeFiles/ALL_BUILD.dir
+C:/CryptoWebSocket/build/CMakeFiles/ZERO_CHECK.dir
