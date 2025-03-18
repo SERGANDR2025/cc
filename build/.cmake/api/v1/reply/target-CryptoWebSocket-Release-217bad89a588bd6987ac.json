@@ -11,7 +11,8 @@
 		"commands" : 
 		[
 			"add_executable",
-			"target_link_libraries"
+			"target_link_libraries",
+			"add_definitions"
 		],
 		"files" : 
 		[
@@ -25,13 +26,25 @@
 			{
 				"command" : 0,
 				"file" : 0,
-				"line" : 30,
+				"line" : 35,
 				"parent" : 0
 			},
 			{
 				"command" : 1,
 				"file" : 0,
-				"line" : 33,
+				"line" : 38,
+				"parent" : 0
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 24,
+				"parent" : 0
+			},
+			{
+				"command" : 2,
+				"file" : 0,
+				"line" : 26,
 				"parent" : 0
 			}
 		]
@@ -42,19 +55,11 @@
 			"compileCommandFragments" : 
 			[
 				{
-					"fragment" : "-O3 -DNDEBUG -O3 -march=native -mavx2 -std=gnu++17"
+					"fragment" : "-O3 -DNDEBUG -O3 -march=native -mtune=native -mavx2 -mfma -flto -std=gnu++17"
 				}
 			],
 			"defines" : 
 			[
-				{
-					"backtrace" : 2,
-					"define" : "BOOST_CONTAINER_DYN_LINK"
-				},
-				{
-					"backtrace" : 2,
-					"define" : "BOOST_CONTAINER_NO_LIB"
-				},
 				{
 					"backtrace" : 2,
 					"define" : "BOOST_RANDOM_DYN_LINK"
@@ -72,8 +77,16 @@
 					"define" : "BOOST_SYSTEM_NO_LIB"
 				},
 				{
+					"backtrace" : 3,
+					"define" : "SIMDJSON_ENABLE_AVX2=ON"
+				},
+				{
 					"backtrace" : 2,
 					"define" : "SIMDJSON_THREADS_ENABLED=1"
+				},
+				{
+					"backtrace" : 4,
+					"define" : "SIMDJSON_USE_HASWELL=1"
 				}
 			],
 			"language" : "CXX",
@@ -97,7 +110,7 @@
 		"commandFragments" : 
 		[
 			{
-				"fragment" : "-O3 -DNDEBUG -O3 -march=native -mavx2",
+				"fragment" : "-O3 -DNDEBUG -O3 -march=native -mtune=native -mavx2 -mfma -flto",
 				"role" : "flags"
 			},
 			{
@@ -112,11 +125,6 @@
 			{
 				"backtrace" : 2,
 				"fragment" : "/usr/lib/x86_64-linux-gnu/libboost_random.so.1.83.0",
-				"role" : "libraries"
-			},
-			{
-				"backtrace" : 2,
-				"fragment" : "/usr/lib/x86_64-linux-gnu/libboost_container.so.1.83.0",
 				"role" : "libraries"
 			},
 			{

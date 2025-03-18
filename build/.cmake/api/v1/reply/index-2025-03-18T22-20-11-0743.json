@@ -26,7 +26,7 @@
 	"objects" : 
 	[
 		{
-			"jsonFile" : "codemodel-v2-abf793385cc45d37ead2.json",
+			"jsonFile" : "codemodel-v2-7c52dd5a20f9ed1381e0.json",
 			"kind" : "codemodel",
 			"version" : 
 			{
@@ -35,7 +35,7 @@
 			}
 		},
 		{
-			"jsonFile" : "cache-v2-6f2b66875d49e0d3ff5a.json",
+			"jsonFile" : "cache-v2-62ddc58e463787ff486a.json",
 			"kind" : "cache",
 			"version" : 
 			{
@@ -44,7 +44,7 @@
 			}
 		},
 		{
-			"jsonFile" : "cmakeFiles-v1-46cf0656fb638c641a29.json",
+			"jsonFile" : "cmakeFiles-v1-b559d8cc78487f1787ce.json",
 			"kind" : "cmakeFiles",
 			"version" : 
 			{
@@ -64,70 +64,6 @@
 	],
 	"reply" : 
 	{
-		"client-MicrosoftVS" : 
-		{
-			"query.json" : 
-			{
-				"requests" : 
-				[
-					{
-						"kind" : "cache",
-						"version" : 2
-					},
-					{
-						"kind" : "cmakeFiles",
-						"version" : 1
-					},
-					{
-						"kind" : "codemodel",
-						"version" : 2
-					},
-					{
-						"kind" : "toolchains",
-						"version" : 1
-					}
-				],
-				"responses" : 
-				[
-					{
-						"jsonFile" : "cache-v2-6f2b66875d49e0d3ff5a.json",
-						"kind" : "cache",
-						"version" : 
-						{
-							"major" : 2,
-							"minor" : 0
-						}
-					},
-					{
-						"jsonFile" : "cmakeFiles-v1-46cf0656fb638c641a29.json",
-						"kind" : "cmakeFiles",
-						"version" : 
-						{
-							"major" : 1,
-							"minor" : 1
-						}
-					},
-					{
-						"jsonFile" : "codemodel-v2-abf793385cc45d37ead2.json",
-						"kind" : "codemodel",
-						"version" : 
-						{
-							"major" : 2,
-							"minor" : 7
-						}
-					},
-					{
-						"jsonFile" : "toolchains-v1-e5a0f4b1e58d47556da2.json",
-						"kind" : "toolchains",
-						"version" : 
-						{
-							"major" : 1,
-							"minor" : 0
-						}
-					}
-				]
-			}
-		},
 		"client-vscode" : 
 		{
 			"query.json" : 
@@ -154,7 +90,7 @@
 				"responses" : 
 				[
 					{
-						"jsonFile" : "cache-v2-6f2b66875d49e0d3ff5a.json",
+						"jsonFile" : "cache-v2-62ddc58e463787ff486a.json",
 						"kind" : "cache",
 						"version" : 
 						{
@@ -163,7 +99,7 @@
 						}
 					},
 					{
-						"jsonFile" : "codemodel-v2-abf793385cc45d37ead2.json",
+						"jsonFile" : "codemodel-v2-7c52dd5a20f9ed1381e0.json",
 						"kind" : "codemodel",
 						"version" : 
 						{
@@ -181,7 +117,7 @@
 						}
 					},
 					{
-						"jsonFile" : "cmakeFiles-v1-46cf0656fb638c641a29.json",
+						"jsonFile" : "cmakeFiles-v1-b559d8cc78487f1787ce.json",
 						"kind" : "cmakeFiles",
 						"version" : 
 						{

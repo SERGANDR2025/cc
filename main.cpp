@@ -28,26 +28,30 @@ struct Trade {
 };
 
 // 🔹 Константы буфера
-constexpr size_t PACKET_SIZE = 300 * 15;  // 4500 байт в пакете
-constexpr size_t BUFFER_SIZE = 10;        // Кольцевой буфер на 10 пакетов
+constexpr size_t BUFFER_SIZE = 10;  // Кольцевой буфер на 10 пакетов
 
 // 🔹 Потокобезопасный кольцевой буфер
 std::mutex bufferMutex;
-std::condition_variable_any bufferCV;
 boost::circular_buffer<simdjson::padded_string> ringBuffer(BUFFER_SIZE);
-
-// 🔹 Флаг работы потоков
+std::condition_variable bufferCV;
 std::atomic<bool> running{true};
 
 // 🔹 Очередь для хранения трейдов
 tbb::concurrent_vector<Trade> parsedTrades;
-std::mutex coutMutex;
+
+// 🔹 Вывод информации о SIMDJSON
+void print_simdjson_info() {
+    std::cout << "✅ simdjson is using: " 
+              << simdjson::get_active_implementation()->name() 
+              << " (" << simdjson::get_active_implementation()->description() 
+              << ")\n" << std::flush;
+}
 
 // 🔹 Запись трейдов в лог
 void save_trades_to_log() {
     std::ofstream logFile("trades.log", std::ios::app);
     if (!logFile.is_open()) {
-        std::cerr << "Error: Cannot open log file!\n";
+        std::cerr << "❌ Error: Cannot open log file!\n";
         return;
     }
 
@@ -56,29 +60,29 @@ void save_trades_to_log() {
     }
 
     logFile.close();
-    std::cout << "Trades saved to trades.log\n" << std::flush;
+    std::cout << "📄 Trades saved to trades.log\n" << std::flush;
 }
 
 // 🔹 Обработчик `Ctrl+C`
 void signal_handler(int signal) {
-    std::cout << "\nReceived signal " << signal << ", stopping...\n" << std::flush;
+    std::cout << "\n⚠ Received signal " << signal << ", stopping...\n" << std::flush;
     running.store(false);
-    bufferCV.notify_all();
+    bufferCV.notify_one();
     c.stop();
 }
 
-// 🔹 Запись данных в буфер (исправленная версия)
+// 🔹 Запись данных в буфер
 void write_to_buffer(const std::string& data) {
     std::unique_lock<std::mutex> lock(bufferMutex);
 
     if (ringBuffer.full()) {
-        std::cerr << "⚠ Warning: Ring buffer is full, replacing old data!\n" << std::flush;
-        ringBuffer.pop_front();  // Удаляем старейший пакет
+        std::cerr << "⚠ Warning: Ring buffer is full, dropping data!\n" << std::flush;
+        return;
     }
 
-    // ✅ Исправлено: используем `padded_string(data)` вместо `make_padded()`
-    ringBuffer.push_back(simdjson::padded_string(data));
-    bufferCV.notify_all();
+    // ✅ Используем padded_string для гарантированного `SIMDJSON_PADDING`
+    ringBuffer.push_back(simdjson::padded_string::copy(data));
+    bufferCV.notify_one();
 }
 
 // 🔹 Парсинг сообщений из буфера
@@ -91,6 +95,7 @@ void parse_buffer() {
         if (!running.load()) break;
 
         simdjson::padded_string buffer = std::move(ringBuffer.front());
+        ringBuffer.pop_front();
         lock.unlock();
 
         try {
@@ -98,8 +103,6 @@ void parse_buffer() {
             int64_t ts = doc["ts"].get_int64();
 
             auto trades = doc["data"].get_array();
-            size_t trade_count = 0;
-
             for (auto trade : trades) {
                 Trade t;
                 t.ts = ts;
@@ -118,26 +121,9 @@ void parse_buffer() {
                     : std::nullopt;
 
                 parsedTrades.push_back(t);
-                trade_count++;
 
-                // 🔹 Подробный вывод информации о трейде
-                std::lock_guard<std::mutex> lock(coutMutex);
-                std::cout << "Parsed Trade: " << t.s 
-                          << " | Price: " << t.p 
-                          << " | Volume: " << t.v 
-                          << " | Side: " << t.S 
-                          << " | Change: " << t.L 
-                          << " | BT: " << (t.BT ? (*t.BT ? "true" : "false") : "null") 
-                          << " | RPI: " << (t.RPI ? (*t.RPI ? "true" : "false") : "null") 
-                          << "\n" << std::flush;
+                std::cout << "📊 Parsed Trade: " << t.s << " Price: " << t.p << " Volume: " << t.v << "\n" << std::flush;
             }
-
-            // 🔹 Вывод количества обработанных трейдов в одном пакете
-            std::cout << "✅ Processed " << trade_count << " trades from packet at timestamp: " << ts << "\n" << std::flush;
-
-            // ✅ Удаляем элемент из буфера только если парсинг прошел успешно
-            lock.lock();
-            ringBuffer.pop_front();
         }
         catch (const std::exception& e) {
             std::cerr << "❌ Exception during parsing: " << e.what() << "\n" << std::flush;
@@ -166,9 +152,11 @@ int main() {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    print_simdjson_info();  // ✅ Вывод информации о SIMDJSON
+
     c.init_asio();
-    c.set_open_handler([](websocketpp::connection_hdl) { std::cout << "✅ Connected to WebSocket server.\n" << std::flush; });
-    c.set_close_handler([](websocketpp::connection_hdl) { std::cout << "❌ Disconnected from WebSocket server.\n" << std::flush; });
+    c.set_open_handler([](websocketpp::connection_hdl) { std::cout << "🔗 Connected\n" << std::flush; });
+    c.set_close_handler([](websocketpp::connection_hdl) { std::cout << "❌ Disconnected\n" << std::flush; });
     c.set_message_handler(on_message);
 
     websocketpp::lib::error_code ec;
@@ -185,6 +173,7 @@ int main() {
     wsThread.join();
     parserThread.join();
     save_trades_to_log();
-    std::cout << "✅ Program exited cleanly.\n" << std::flush;
+
+    std::cout << "✅ Program exited cleanly\n" << std::flush;
     return 0;
 }

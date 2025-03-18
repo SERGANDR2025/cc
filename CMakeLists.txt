@@ -17,12 +17,17 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /arch:AVX2")
 else()
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -mavx2")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -mtune=native -mavx2 -mfma -flto")
 endif()
+
+# Включаем поддержку AVX2 в simdjson
+add_definitions(-DSIMDJSON_ENABLE_AVX2=ON)
+
+add_definitions(-DSIMDJSON_USE_HASWELL=1)
 
 # Поиск зависимостей
 find_package(websocketpp CONFIG REQUIRED)
-find_package(Boost REQUIRED COMPONENTS system random container)  # 🔹 Добавлен Boost.Container
+find_package(Boost REQUIRED COMPONENTS system random)
 find_package(simdjson CONFIG REQUIRED)
 find_package(TBB REQUIRED)
 
@@ -34,7 +39,6 @@ target_link_libraries(CryptoWebSocket PRIVATE
     websocketpp::websocketpp 
     Boost::system 
     Boost::random 
-    Boost::container  # 🔹 Линкуем Boost.Container для CircularBuffer
     simdjson::simdjson 
     TBB::tbb
 )
