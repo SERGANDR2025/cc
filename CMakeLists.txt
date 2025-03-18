@@ -6,12 +6,12 @@ project(CryptoWebSocket CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Задаём каталоги для выходных файлов, чтобы избежать дублирования "Release"
+# Задаём каталоги для выходных файлов
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
-# Настройки оптимизации для MSVC и для других компиляторов
+# Настройки оптимизации
 if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /Zi")
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /arch:AVX2")
@@ -24,30 +24,16 @@ endif()
 find_package(websocketpp CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system random)
 find_package(simdjson CONFIG REQUIRED)
-find_package(TBB CONFIG REQUIRED)
-
-# Добавляем явно каталог с TBB (если он нужен для обеих конфигураций можно добавить всегда)
-link_directories("C:/oneTBB/install/lib")
+find_package(TBB REQUIRED)
 
 # Создаём исполняемый файл
 add_executable(CryptoWebSocket main.cpp)
 
-# Разделяем линковку для Debug и Release, чтобы в Release явно указать путь к tbb12.lib
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    message(STATUS "For Release, linking explicitly to TBB library: C:/oneTBB/install/lib/tbb12.lib")
-    target_link_libraries(CryptoWebSocket PRIVATE 
-        websocketpp::websocketpp 
-        Boost::system 
-        Boost::random 
-        simdjson::simdjson 
-        "C:/oneTBB/install/lib/tbb12.lib"
-    )
-else()
-    target_link_libraries(CryptoWebSocket PRIVATE 
-        websocketpp::websocketpp 
-        Boost::system 
-        Boost::random 
-        simdjson::simdjson 
-        TBB::tbb
-    )
-endif()
+# Линковка для всех конфигураций
+target_link_libraries(CryptoWebSocket PRIVATE 
+    websocketpp::websocketpp 
+    Boost::system 
+    Boost::random 
+    simdjson::simdjson 
+    TBB::tbb
+)

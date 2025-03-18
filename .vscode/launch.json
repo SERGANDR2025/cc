@@ -1,0 +1,28 @@
+{
+    "version": "2.0.0",
+    "configurations": [
+        {
+            "name": "Launch CryptoWebSocket (Release)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/CryptoWebSocket",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build",
+            "environment": [
+                { "name": "LD_LIBRARY_PATH", "value": "/usr/local/lib:/usr/lib" }
+            ],
+            "externalConsole": false, 
+            "MIMode": "gdb",
+            "preLaunchTask": "CMake: build Release",
+            "console": "integratedTerminal",
+            "setupCommands": [
+                {
+                    "description": "Continue execution after startup",
+                    "text": "-exec-continue",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}

@@ -1,4 +1,5 @@
-﻿#include <websocketpp/config/asio_no_tls_client.hpp>
+﻿
+#include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 #include <simdjson.h>
 #include <iostream>
@@ -12,92 +13,102 @@
 #include <csignal>
 #include <atomic>
 #include <array>
-#include <optional> // Добавлено для std::optional
+#include <optional>
+#include <future>
 
 typedef websocketpp::client<websocketpp::config::asio_client> client;
 client c;
 
 // Структура для хранения данных трейда
 struct Trade {
-    int64_t ts;         // Временная метка
-    std::string s;      // Символ
-    std::string S;      // Сторона (Buy/Sell)
-    double v;           // Объем
-    double p;           // Цена
-    std::string L;      // Направление изменения цены
-    std::optional<bool> BT;  // Поле BT (boolean, может отсутствовать)
-    std::optional<bool> RPI; // Поле RPI (boolean, может отсутствовать)
+    int64_t ts;
+    std::string s;
+    std::string S;
+    double v;
+    double p;
+    std::string L;
+    std::optional<bool> BT;
+    std::optional<bool> RPI;
 };
 
-// Два буфера для данных
-constexpr size_t BUFFER_SIZE = 5000; // Размер буфера с запасом
-std::array<std::string, 2> buffers;
-std::atomic<size_t> activeBufferIndex{ 0 }; // Индекс активного буфера
+// Флаги работы потоков
+std::atomic<bool> running{true};
+std::atomic<bool> wsRunning{true};
+std::promise<void> exitSignal;
+std::future<void> futureExit = exitSignal.get_future();
+
+std::thread parserThread, wsThread;
+std::mutex coutMutex;
 std::mutex bufferMutex;
 std::condition_variable bufferCV;
-std::atomic<bool> running{ true };
 
 // Очередь для хранения распарсенных данных
 tbb::concurrent_vector<Trade> parsedTrades;
-std::mutex coutMutex;
 
-// Обработчик сигналов для graceful shutdown
+// Буферы для WebSocket-сообщений
+constexpr size_t BUFFER_SIZE = 5000;
+std::array<std::string, 2> buffers;
+std::atomic<size_t> activeBufferIndex{0};
+
+// 🔹 Обработчик `Ctrl+C`
 void signal_handler(int signal) {
     {
         std::lock_guard<std::mutex> lock(coutMutex);
-        std::cout << "Received signal " << signal << ", stopping...\n";
+        std::cout << "\nReceived signal " << signal << ", stopping...\n" << std::flush;
     }
+
     running.store(false);
-    c.stop();
+    wsRunning.store(false);
+    exitSignal.set_value();  // Отправляем сигнал завершения
+
+    c.stop();  // Останавливаем WebSocket
+
+    if (wsThread.joinable()) wsThread.join();
+    if (parserThread.joinable()) parserThread.join();
+
+    std::cout << "Program exited cleanly.\n" << std::flush;
 }
 
-// Функция для записи данных в буфер
+// 🔹 Запись данных в буфер
 void write_to_buffer(const std::string& data) {
     std::unique_lock<std::mutex> lock(bufferMutex);
     size_t index = activeBufferIndex.load();
-    buffers[index] += data; // Добавляем данные в активный буфер
+    buffers[index] += data;
+
     if (buffers[index].size() >= BUFFER_SIZE) {
-        // Переключаемся на другой буфер
         activeBufferIndex.store(1 - index);
-        buffers[1 - index].clear(); // Очищаем второй буфер
-        bufferCV.notify_one();     // Оповещаем поток парсера
+        buffers[1 - index].clear();
+        bufferCV.notify_one();
     }
 }
 
-// Функция для парсинга данных из буфера
+// 🔹 Парсинг сообщений из буфера
 void parse_buffer() {
     simdjson::ondemand::parser parser;
     while (running.load()) {
         std::unique_lock<std::mutex> lock(bufferMutex);
-        bufferCV.wait(lock, [&] {
-            return !running.load() || buffers[1 - activeBufferIndex.load()].size() > 0;
-            });
+        bufferCV.wait(lock, [] { return !running.load() || !buffers[1 - activeBufferIndex.load()].empty(); });
 
         if (!running.load()) break;
 
-        // Получаем данные из неактивного буфера
         size_t index = 1 - activeBufferIndex.load();
         std::string& buffer = buffers[index];
         if (buffer.empty()) continue;
 
         try {
             auto doc = parser.iterate(buffer);
-            int64_t ts = doc["ts"].get_int64(); // Временная метка
+            int64_t ts = doc["ts"].get_int64();
 
-            // Обрабатываем массив data
             auto trades = doc["data"].get_array();
             for (auto trade : trades) {
                 Trade t;
                 t.ts = ts;
-
-                // Извлекаем обязательные поля
                 t.s = std::string(trade["s"].get_string().value());
                 t.S = std::string(trade["S"].get_string().value());
                 t.v = std::stod(std::string(trade["v"].get_string().value()));
                 t.p = std::stod(std::string(trade["p"].get_string().value()));
                 t.L = std::string(trade["L"].get_string().value());
 
-                // Обрабатываем опциональные boolean поля
                 t.BT = trade["BT"].type() == simdjson::ondemand::json_type::boolean
                     ? std::optional<bool>(trade["BT"].get_bool())
                     : std::nullopt;
@@ -106,73 +117,73 @@ void parse_buffer() {
                     ? std::optional<bool>(trade["RPI"].get_bool())
                     : std::nullopt;
 
-                // Добавляем трейд в очередь
                 parsedTrades.push_back(t);
 
-                // Выводим распарсенные данные на консоль
                 std::lock_guard<std::mutex> lock(coutMutex);
-                std::cout << "Parsed Trade:\n"
-                    << "  ts: " << t.ts << "\n"
-                    << "  s: " << t.s << "\n"
-                    << "  S: " << t.S << "\n"
-                    << "  v: " << t.v << "\n"
-                    << "  p: " << t.p << "\n"
-                    << "  L: " << t.L << "\n"
-                    << "  BT: " << (t.BT.has_value() ? (t.BT.value() ? "true" : "false") : "null") << "\n"
-                    << "  RPI: " << (t.RPI.has_value() ? (t.RPI.value() ? "true" : "false") : "null") << "\n"
-                    << "-------------------------\n";
+                std::cout << "Parsed Trade: " << t.s << " Price: " << t.p << " Volume: " << t.v << "\n" << std::flush;
             }
         }
         catch (const std::exception& e) {
-            std::cerr << "Exception during parsing: " << e.what() << "\n";
+            std::cerr << "Exception during parsing: " << e.what() << "\n" << std::flush;
         }
 
-        buffer.clear(); // Очищаем буфер после обработки
+        buffer.clear();
     }
 }
 
-// Обработчик сообщений WebSocket
-void on_message(client*, websocketpp::connection_hdl, client::message_ptr msg) {
-    std::string payload = msg->get_payload();
-    write_to_buffer(payload); // Записываем данные в буфер
+// 🔹 Обработчик сообщений WebSocket
+void on_message(websocketpp::connection_hdl, client::message_ptr msg) {
+    write_to_buffer(msg->get_payload());
 }
 
-void on_open(client*, websocketpp::connection_hdl) {
-    std::cout << "Connected\n";
+// 🔹 Обработчики событий WebSocket
+void on_open(websocketpp::connection_hdl) {
+    std::cout << "Connected\n" << std::flush;
 }
 
-void on_close(client*, websocketpp::connection_hdl) {
-    std::cout << "Disconnected\n";
+void on_close(websocketpp::connection_hdl) {
+    std::cout << "Disconnected\n" << std::flush;
 }
 
+// 🔹 Поток WebSocket
+void websocket_thread() {
+    while (wsRunning.load()) {
+        try {
+            c.run_one();  // Запускаем WebSocket-клиент в цикле, чтобы `Ctrl+C` мог его остановить
+        } catch (const std::exception& e) {
+            std::cerr << "WebSocket error: " << e.what() << "\n";
+        }
+    }
+}
+
+// 🔹 Основная функция
 int main() {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
+    std::signal(SIGPIPE, SIG_IGN);
 
     c.init_asio();
-    c.set_open_handler(std::bind(&on_open, &c, std::placeholders::_1));
-    c.set_close_handler(std::bind(&on_close, &c, std::placeholders::_1));
-    c.set_message_handler(std::bind(&on_message, &c, std::placeholders::_1, std::placeholders::_2));
+    c.set_open_handler(on_open);
+    c.set_close_handler(on_close);
+    c.set_message_handler(on_message);
 
     websocketpp::lib::error_code ec;
     auto con = c.get_connection("ws://localhost:8765", ec);
     if (ec) {
-        std::cout << "Connection error: " << ec.message() << "\n";
+        std::cerr << "Connection error: " << ec.message() << "\n" << std::flush;
         return 1;
     }
     c.connect(con);
 
-    // Запускаем поток для парсинга данных
-    std::thread parserThread(parse_buffer);
+    parserThread = std::thread(parse_buffer);
+    wsThread = std::thread(websocket_thread);
 
-    // Запускаем WebSocket
-    std::thread wsThread([&]() {
-        c.run();
-        std::cout << "WebSocket thread finished\n";
-        });
+    // 🔹 Ждём сигнал завершения
+    futureExit.wait();
 
-    wsThread.join();
-    parserThread.join();
-    std::cout << "Program exited cleanly\n";
+    if (wsThread.joinable()) wsThread.join();
+    if (parserThread.joinable()) parserThread.join();
+
+    std::cout << "Program exited cleanly\n" << std::flush;
     return 0;
 }
