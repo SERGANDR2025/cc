@@ -1,8 +1,9 @@
-﻿
-#include <websocketpp/config/asio_no_tls_client.hpp>
+﻿#include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 #include <simdjson.h>
+#include <boost/circular_buffer.hpp>
 #include <iostream>
+#include <fstream>
 #include <functional>
 #include <chrono>
 #include <thread>
@@ -12,74 +13,72 @@
 #include <mutex>
 #include <csignal>
 #include <atomic>
-#include <array>
 #include <optional>
 #include <future>
 
 typedef websocketpp::client<websocketpp::config::asio_client> client;
 client c;
 
-// Структура для хранения данных трейда
+// 🔹 Структура трейда
 struct Trade {
     int64_t ts;
-    std::string s;
-    std::string S;
-    double v;
-    double p;
-    std::string L;
-    std::optional<bool> BT;
-    std::optional<bool> RPI;
+    std::string s, S, L;
+    double v, p;
+    std::optional<bool> BT, RPI;
 };
 
-// Флаги работы потоков
-std::atomic<bool> running{true};
-std::atomic<bool> wsRunning{true};
-std::promise<void> exitSignal;
-std::future<void> futureExit = exitSignal.get_future();
+// 🔹 Константы буфера
+constexpr size_t PACKET_SIZE = 300 * 15;  // 4500 байт в пакете
+constexpr size_t BUFFER_SIZE = 10;        // Кольцевой буфер на 10 пакетов
 
-std::thread parserThread, wsThread;
-std::mutex coutMutex;
+// 🔹 Потокобезопасный кольцевой буфер
 std::mutex bufferMutex;
-std::condition_variable bufferCV;
+std::condition_variable_any bufferCV;
+boost::circular_buffer<simdjson::padded_string> ringBuffer(BUFFER_SIZE);
 
-// Очередь для хранения распарсенных данных
+// 🔹 Флаг работы потоков
+std::atomic<bool> running{true};
+
+// 🔹 Очередь для хранения трейдов
 tbb::concurrent_vector<Trade> parsedTrades;
+std::mutex coutMutex;
 
-// Буферы для WebSocket-сообщений
-constexpr size_t BUFFER_SIZE = 5000;
-std::array<std::string, 2> buffers;
-std::atomic<size_t> activeBufferIndex{0};
+// 🔹 Запись трейдов в лог
+void save_trades_to_log() {
+    std::ofstream logFile("trades.log", std::ios::app);
+    if (!logFile.is_open()) {
+        std::cerr << "Error: Cannot open log file!\n";
+        return;
+    }
+
+    for (const auto& trade : parsedTrades) {
+        logFile << trade.ts << " " << trade.s << " " << trade.p << " " << trade.v << "\n";
+    }
+
+    logFile.close();
+    std::cout << "Trades saved to trades.log\n" << std::flush;
+}
 
 // 🔹 Обработчик `Ctrl+C`
 void signal_handler(int signal) {
-    {
-        std::lock_guard<std::mutex> lock(coutMutex);
-        std::cout << "\nReceived signal " << signal << ", stopping...\n" << std::flush;
-    }
-
+    std::cout << "\nReceived signal " << signal << ", stopping...\n" << std::flush;
     running.store(false);
-    wsRunning.store(false);
-    exitSignal.set_value();  // Отправляем сигнал завершения
-
-    c.stop();  // Останавливаем WebSocket
-
-    if (wsThread.joinable()) wsThread.join();
-    if (parserThread.joinable()) parserThread.join();
-
-    std::cout << "Program exited cleanly.\n" << std::flush;
+    bufferCV.notify_all();
+    c.stop();
 }
 
-// 🔹 Запись данных в буфер
+// 🔹 Запись данных в буфер (исправленная версия)
 void write_to_buffer(const std::string& data) {
     std::unique_lock<std::mutex> lock(bufferMutex);
-    size_t index = activeBufferIndex.load();
-    buffers[index] += data;
 
-    if (buffers[index].size() >= BUFFER_SIZE) {
-        activeBufferIndex.store(1 - index);
-        buffers[1 - index].clear();
-        bufferCV.notify_one();
+    if (ringBuffer.full()) {
+        std::cerr << "⚠ Warning: Ring buffer is full, replacing old data!\n" << std::flush;
+        ringBuffer.pop_front();  // Удаляем старейший пакет
     }
+
+    // ✅ Исправлено: используем `padded_string(data)` вместо `make_padded()`
+    ringBuffer.push_back(simdjson::padded_string(data));
+    bufferCV.notify_all();
 }
 
 // 🔹 Парсинг сообщений из буфера
@@ -87,19 +86,20 @@ void parse_buffer() {
     simdjson::ondemand::parser parser;
     while (running.load()) {
         std::unique_lock<std::mutex> lock(bufferMutex);
-        bufferCV.wait(lock, [] { return !running.load() || !buffers[1 - activeBufferIndex.load()].empty(); });
+        bufferCV.wait(lock, [] { return !running.load() || !ringBuffer.empty(); });
 
         if (!running.load()) break;
 
-        size_t index = 1 - activeBufferIndex.load();
-        std::string& buffer = buffers[index];
-        if (buffer.empty()) continue;
+        simdjson::padded_string buffer = std::move(ringBuffer.front());
+        lock.unlock();
 
         try {
             auto doc = parser.iterate(buffer);
             int64_t ts = doc["ts"].get_int64();
 
             auto trades = doc["data"].get_array();
+            size_t trade_count = 0;
+
             for (auto trade : trades) {
                 Trade t;
                 t.ts = ts;
@@ -118,16 +118,30 @@ void parse_buffer() {
                     : std::nullopt;
 
                 parsedTrades.push_back(t);
+                trade_count++;
 
+                // 🔹 Подробный вывод информации о трейде
                 std::lock_guard<std::mutex> lock(coutMutex);
-                std::cout << "Parsed Trade: " << t.s << " Price: " << t.p << " Volume: " << t.v << "\n" << std::flush;
+                std::cout << "Parsed Trade: " << t.s 
+                          << " | Price: " << t.p 
+                          << " | Volume: " << t.v 
+                          << " | Side: " << t.S 
+                          << " | Change: " << t.L 
+                          << " | BT: " << (t.BT ? (*t.BT ? "true" : "false") : "null") 
+                          << " | RPI: " << (t.RPI ? (*t.RPI ? "true" : "false") : "null") 
+                          << "\n" << std::flush;
             }
+
+            // 🔹 Вывод количества обработанных трейдов в одном пакете
+            std::cout << "✅ Processed " << trade_count << " trades from packet at timestamp: " << ts << "\n" << std::flush;
+
+            // ✅ Удаляем элемент из буфера только если парсинг прошел успешно
+            lock.lock();
+            ringBuffer.pop_front();
         }
         catch (const std::exception& e) {
-            std::cerr << "Exception during parsing: " << e.what() << "\n" << std::flush;
+            std::cerr << "❌ Exception during parsing: " << e.what() << "\n" << std::flush;
         }
-
-        buffer.clear();
     }
 }
 
@@ -136,22 +150,13 @@ void on_message(websocketpp::connection_hdl, client::message_ptr msg) {
     write_to_buffer(msg->get_payload());
 }
 
-// 🔹 Обработчики событий WebSocket
-void on_open(websocketpp::connection_hdl) {
-    std::cout << "Connected\n" << std::flush;
-}
-
-void on_close(websocketpp::connection_hdl) {
-    std::cout << "Disconnected\n" << std::flush;
-}
-
 // 🔹 Поток WebSocket
 void websocket_thread() {
-    while (wsRunning.load()) {
+    while (running.load()) {
         try {
-            c.run_one();  // Запускаем WebSocket-клиент в цикле, чтобы `Ctrl+C` мог его остановить
+            c.run_one();
         } catch (const std::exception& e) {
-            std::cerr << "WebSocket error: " << e.what() << "\n";
+            std::cerr << "❌ WebSocket error: " << e.what() << "\n";
         }
     }
 }
@@ -160,30 +165,26 @@ void websocket_thread() {
 int main() {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
-    std::signal(SIGPIPE, SIG_IGN);
 
     c.init_asio();
-    c.set_open_handler(on_open);
-    c.set_close_handler(on_close);
+    c.set_open_handler([](websocketpp::connection_hdl) { std::cout << "✅ Connected to WebSocket server.\n" << std::flush; });
+    c.set_close_handler([](websocketpp::connection_hdl) { std::cout << "❌ Disconnected from WebSocket server.\n" << std::flush; });
     c.set_message_handler(on_message);
 
     websocketpp::lib::error_code ec;
     auto con = c.get_connection("ws://localhost:8765", ec);
     if (ec) {
-        std::cerr << "Connection error: " << ec.message() << "\n" << std::flush;
+        std::cerr << "❌ Connection error: " << ec.message() << "\n" << std::flush;
         return 1;
     }
     c.connect(con);
 
-    parserThread = std::thread(parse_buffer);
-    wsThread = std::thread(websocket_thread);
+    std::thread parserThread(parse_buffer);
+    std::thread wsThread(websocket_thread);
 
-    // 🔹 Ждём сигнал завершения
-    futureExit.wait();
-
-    if (wsThread.joinable()) wsThread.join();
-    if (parserThread.joinable()) parserThread.join();
-
-    std::cout << "Program exited cleanly\n" << std::flush;
+    wsThread.join();
+    parserThread.join();
+    save_trades_to_log();
+    std::cout << "✅ Program exited cleanly.\n" << std::flush;
     return 0;
 }

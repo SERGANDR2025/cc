@@ -1142,6 +1142,22 @@
 			"value" : "TRUE"
 		},
 		{
+			"name" : "boost_container_DIR",
+			"properties" : 
+			[
+				{
+					"name" : "ADVANCED",
+					"value" : "1"
+				},
+				{
+					"name" : "HELPSTRING",
+					"value" : "The directory containing a CMake configuration file for boost_container."
+				}
+			],
+			"type" : "PATH",
+			"value" : "/usr/lib/x86_64-linux-gnu/cmake/boost_container-1.83.0"
+		},
+		{
 			"name" : "boost_headers_DIR",
 			"properties" : 
 			[

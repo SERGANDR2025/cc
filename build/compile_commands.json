@@ -1,7 +1,7 @@
 [
 {
   "directory": "/home/sa/cc/build",
-  "command": "/usr/bin/g++ -DBOOST_RANDOM_DYN_LINK -DBOOST_RANDOM_NO_LIB -DBOOST_SYSTEM_DYN_LINK -DBOOST_SYSTEM_NO_LIB -DSIMDJSON_THREADS_ENABLED=1  -O3 -DNDEBUG -O3 -march=native -mavx2 -std=gnu++17 -o CMakeFiles/CryptoWebSocket.dir/main.cpp.o -c /home/sa/cc/main.cpp",
+  "command": "/usr/bin/g++ -DBOOST_CONTAINER_DYN_LINK -DBOOST_CONTAINER_NO_LIB -DBOOST_RANDOM_DYN_LINK -DBOOST_RANDOM_NO_LIB -DBOOST_SYSTEM_DYN_LINK -DBOOST_SYSTEM_NO_LIB -DSIMDJSON_THREADS_ENABLED=1  -O3 -DNDEBUG -O3 -march=native -mavx2 -std=gnu++17 -o CMakeFiles/CryptoWebSocket.dir/main.cpp.o -c /home/sa/cc/main.cpp",
   "file": "/home/sa/cc/main.cpp",
   "output": "CMakeFiles/CryptoWebSocket.dir/main.cpp.o"
 }

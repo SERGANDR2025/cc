@@ -22,7 +22,7 @@ endif()
 
 # Поиск зависимостей
 find_package(websocketpp CONFIG REQUIRED)
-find_package(Boost REQUIRED COMPONENTS system random)
+find_package(Boost REQUIRED COMPONENTS system random container)  # 🔹 Добавлен Boost.Container
 find_package(simdjson CONFIG REQUIRED)
 find_package(TBB REQUIRED)
 
@@ -34,6 +34,7 @@ target_link_libraries(CryptoWebSocket PRIVATE
     websocketpp::websocketpp 
     Boost::system 
     Boost::random 
+    Boost::container  # 🔹 Линкуем Boost.Container для CircularBuffer
     simdjson::simdjson 
     TBB::tbb
 )

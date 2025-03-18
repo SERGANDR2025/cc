@@ -94,6 +94,7 @@ CryptoWebSocket: CMakeFiles/CryptoWebSocket.dir/main.cpp.o
 CryptoWebSocket: CMakeFiles/CryptoWebSocket.dir/build.make
 CryptoWebSocket: /usr/lib/x86_64-linux-gnu/libboost_system.so.1.83.0
 CryptoWebSocket: /usr/lib/x86_64-linux-gnu/libboost_random.so.1.83.0
+CryptoWebSocket: /usr/lib/x86_64-linux-gnu/libboost_container.so.1.83.0
 CryptoWebSocket: /usr/local/lib/libsimdjson.a
 CryptoWebSocket: /usr/lib/x86_64-linux-gnu/libtbb.so.12.11
 CryptoWebSocket: CMakeFiles/CryptoWebSocket.dir/link.txt

@@ -169,6 +169,34 @@
 		},
 		{
 			"isExternal" : true,
+			"path" : "/usr/lib/x86_64-linux-gnu/cmake/boost_container-1.83.0/boost_container-config-version.cmake"
+		},
+		{
+			"isExternal" : true,
+			"path" : "/usr/lib/x86_64-linux-gnu/cmake/boost_container-1.83.0/boost_container-config.cmake"
+		},
+		{
+			"isExternal" : true,
+			"path" : "/usr/lib/x86_64-linux-gnu/cmake/BoostDetectToolset-1.83.0.cmake"
+		},
+		{
+			"isExternal" : true,
+			"path" : "/usr/lib/x86_64-linux-gnu/cmake/boost_container-1.83.0/libboost_container-variant-shared.cmake"
+		},
+		{
+			"isExternal" : true,
+			"path" : "/usr/lib/x86_64-linux-gnu/cmake/boost_container-1.83.0/libboost_container-variant-static.cmake"
+		},
+		{
+			"isExternal" : true,
+			"path" : "/usr/lib/x86_64-linux-gnu/cmake/boost_headers-1.83.0/boost_headers-config-version.cmake"
+		},
+		{
+			"isExternal" : true,
+			"path" : "/usr/lib/x86_64-linux-gnu/cmake/boost_headers-1.83.0/boost_headers-config.cmake"
+		},
+		{
+			"isExternal" : true,
 			"path" : "/usr/local/lib/cmake/simdjson/simdjson-config-version.cmake"
 		},
 		{

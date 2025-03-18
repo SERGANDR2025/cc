@@ -49,6 +49,14 @@
 			[
 				{
 					"backtrace" : 2,
+					"define" : "BOOST_CONTAINER_DYN_LINK"
+				},
+				{
+					"backtrace" : 2,
+					"define" : "BOOST_CONTAINER_NO_LIB"
+				},
+				{
+					"backtrace" : 2,
 					"define" : "BOOST_RANDOM_DYN_LINK"
 				},
 				{
@@ -104,6 +112,11 @@
 			{
 				"backtrace" : 2,
 				"fragment" : "/usr/lib/x86_64-linux-gnu/libboost_random.so.1.83.0",
+				"role" : "libraries"
+			},
+			{
+				"backtrace" : 2,
+				"fragment" : "/usr/lib/x86_64-linux-gnu/libboost_container.so.1.83.0",
 				"role" : "libraries"
 			},
 			{
