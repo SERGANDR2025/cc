@@ -3,19 +3,21 @@
     "tasks": [
         {
             "label": "CMake: build Release",
-            "type": "cmake",
-            "command": "build",
+            "type": "shell",
+            "command": "/usr/local/cmake-3.30.0-linux-x86_64/bin/cmake",
             "args": [
+                "--build",
+                "${workspaceFolder}/build",
                 "--config",
-                "Release"
+                "Release",
+                "-j"
             ],
-            "problemMatcher": [
-                "$gcc"
-            ],
+            "problemMatcher": ["$gcc"],
             "group": {
                 "kind": "build",
                 "isDefault": true
-            }
+            },
+            "detail": "Build CryptoWebSocket in Release mode"
         }
     ]
 }

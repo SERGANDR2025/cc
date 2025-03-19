@@ -1,5 +1,5 @@
 {
-    "version": "2.0.0",
+    "version": "0.2.0",
     "configurations": [
         {
             "name": "Launch CryptoWebSocket (Release)",
@@ -12,14 +12,14 @@
             "environment": [
                 { "name": "LD_LIBRARY_PATH", "value": "/usr/local/lib:/usr/lib" }
             ],
-            "externalConsole": false, 
+            "externalConsole": false,
             "MIMode": "gdb",
             "preLaunchTask": "CMake: build Release",
             "console": "integratedTerminal",
             "setupCommands": [
                 {
-                    "description": "Continue execution after startup",
-                    "text": "-exec-continue",
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
                     "ignoreFailures": true
                 }
             ]

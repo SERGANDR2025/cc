@@ -17,12 +17,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /arch:AVX2")
 else()
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -mtune=native -mavx2 -mfma -flto")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -mtune=native -mavx2 -mfma -flto -DNDEBUG")
 endif()
 
 # Включаем поддержку AVX2 в simdjson
 add_definitions(-DSIMDJSON_ENABLE_AVX2=ON)
-
 add_definitions(-DSIMDJSON_USE_HASWELL=1)
 
 # Поиск зависимостей

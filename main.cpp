@@ -1,4 +1,4 @@
-﻿#include <websocketpp/config/asio_no_tls_client.hpp>
+#include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 #include <simdjson.h>
 #include <boost/circular_buffer.hpp>
@@ -14,19 +14,19 @@
 #include <string>
 #include <vector>
 #include <tbb/concurrent_vector.h>
+#include <chrono>
 
 typedef websocketpp::client<websocketpp::config::asio_client> client;
 client c;
 
-// Структура Trade с нужными полями
 struct Trade {
-    int64_t ts;         // Timestamp сообщения (верхний уровень)
-    std::string s;      // Символ
-    std::string S;      // Сторона сделки (Buy/Sell)
-    double v;           // Объем (преобразуем из строки)
-    double p;           // Цена (преобразуем из строки)
-    std::optional<bool> BT;  // Блочная сделка
-    std::optional<bool> RPI; // RPI сделка
+    int64_t ts;
+    std::string s;
+    std::string S;
+    double v;
+    double p;
+    std::optional<bool> BT;
+    std::optional<bool> RPI;
 };
 
 constexpr size_t BUFFER_SIZE = 10;
@@ -80,12 +80,23 @@ void write_to_buffer(const std::string& data) {
 void parse_buffer() {
     std::cout << "🚀 Parser thread started\n" << std::flush;
     simdjson::ondemand::parser parser;
+
+    long long total_parsing_time = 0;
+    int message_count = 0;
+
     while (running.load()) {
         std::unique_lock<std::mutex> lock(bufferMutex);
         bufferCV.wait(lock, [] { return !ringBuffer.empty() || !running.load(); });
 
         if (!running.load() && ringBuffer.empty()) {
             std::cout << "🏁 Parser thread exiting\n" << std::flush;
+            if (message_count > 0) {
+                std::cout << "⏱ Total parsing time (active): " << total_parsing_time << " microseconds (" 
+                          << total_parsing_time / 1000.0 << " ms)\n" << std::flush;
+                std::cout << "⏱ Average time per message: " << total_parsing_time / message_count << " microseconds\n" << std::flush;
+            } else {
+                std::cout << "⏱ No messages parsed\n" << std::flush;
+            }
             break;
         }
 
@@ -94,15 +105,20 @@ void parse_buffer() {
             ringBuffer.pop_front();
             lock.unlock();
 
+            auto start = std::chrono::high_resolution_clock::now();
+
             try {
+                std::cout << "📦 JSON size: " << buffer.size() << " bytes\n" << std::flush; // Вывод размера JSON
                 auto doc = parser.iterate(buffer);
-                int64_t ts = doc["ts"].get_int64(); // Timestamp верхнего уровня
+                int64_t ts = doc["ts"].get_int64();
                 auto data = doc["data"].get_array();
+
+                size_t trade_count = 0; // Подсчёт количества сделок
+                for (auto trade : data) trade_count++;
+                std::cout << "📊 Trade count: " << trade_count << "\n" << std::flush;
 
                 for (auto trade : data) {
                     Trade t;
-
-                    // Парсим только нужные поля
                     t.ts = ts;
                     t.s = std::string(trade["s"].get_string().value());
                     t.S = std::string(trade["S"].get_string().value());
@@ -116,12 +132,14 @@ void parse_buffer() {
                         : std::nullopt;
 
                     parsedTrades.push_back(t);
-                    std::cout << "📊 Parsed Trade: " << t.s << " Side: " << t.S 
-                              << " Price: " << t.p << " Volume: " << t.v 
-                              << " BT: " << (t.BT.has_value() ? (t.BT.value() ? "true" : "false") : "null")
-                              << " RPI: " << (t.RPI.has_value() ? (t.RPI.value() ? "true" : "false") : "null")
-                              << " Time: " << t.ts << "\n" << std::flush;
                 }
+
+                auto end = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+                std::cout << "⏱ Parsing time for this message: " << duration << " microseconds\n" << std::flush;
+                total_parsing_time += duration;
+                message_count++;
+
             } catch (const std::exception& e) {
                 std::cerr << "❌ Exception during parsing: " << e.what() << "\n" << std::flush;
             }
@@ -150,7 +168,9 @@ int main() {
     std::signal(SIGINT, signal_handler);
     std::signal(SIGTERM, signal_handler);
 
+    std::cout << "Starting program...\n" << std::flush;
     print_simdjson_info();
+    std::cout << "Initialization complete\n" << std::flush;
 
     c.init_asio();
     c.set_open_handler([](websocketpp::connection_hdl) { 
