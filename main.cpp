@@ -1,3 +1,4 @@
+
 #include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 #include <simdjson.h>
@@ -13,49 +14,44 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include <tbb/concurrent_vector.h>
-#include <chrono>
 
 typedef websocketpp::client<websocketpp::config::asio_client> client;
 client c;
 
+// Структура для хранения данных сделок (без преобразования v и p в double)
 struct Trade {
     int64_t ts;
     std::string s;
     std::string S;
-    double v;
-    double p;
+    std::string v; // Оставляем как строку
+    std::string p; // Оставляем как строку
     std::optional<bool> BT;
     std::optional<bool> RPI;
 };
 
-constexpr size_t BUFFER_SIZE = 10;
+// Кольцевой буфер для входящих сообщений
+constexpr size_t RING_BUFFER_SIZE = 10;
+boost::circular_buffer<simdjson::padded_string> ringBuffer(RING_BUFFER_SIZE);
+
+// Два кольцевых буфера для двойного буферирования (ёмкость 300 элементов каждый)
+constexpr size_t BUFFER_CAPACITY = 300;
+boost::circular_buffer<Trade> buffer1(BUFFER_CAPACITY);
+boost::circular_buffer<Trade> buffer2(BUFFER_CAPACITY);
+
+// Указатель на активный буфер для записи
+boost::circular_buffer<Trade>* active_buffer = &buffer1;
+boost::circular_buffer<Trade>* inactive_buffer = &buffer2;
+
 std::mutex bufferMutex;
-boost::circular_buffer<simdjson::padded_string> ringBuffer(BUFFER_SIZE);
 std::condition_variable bufferCV;
 std::atomic<bool> running{true};
-tbb::concurrent_vector<Trade> parsedTrades;
+std::mutex swapMutex; // Для переключения буферов
 
 void print_simdjson_info() {
     std::cout << "✅ simdjson is using: " 
               << simdjson::get_active_implementation()->name() 
               << " (" << simdjson::get_active_implementation()->description() 
               << ")\n" << std::flush;
-}
-
-void save_trades_to_log() {
-    std::ofstream logFile("trades.log", std::ios::app);
-    if (!logFile.is_open()) {
-        std::cerr << "❌ Error: Cannot open log file!\n";
-        return;
-    }
-    for (const auto& trade : parsedTrades) {
-        logFile << trade.ts << " " << trade.s << " " << trade.S << " " << trade.p << " " << trade.v 
-                << " BT:" << (trade.BT.has_value() ? (trade.BT.value() ? "true" : "false") : "null")
-                << " RPI:" << (trade.RPI.has_value() ? (trade.RPI.value() ? "true" : "false") : "null") << "\n";
-    }
-    logFile.close();
-    std::cout << "📄 Trades saved to trades.log\n" << std::flush;
 }
 
 void signal_handler(int signal) {
@@ -108,22 +104,34 @@ void parse_buffer() {
             auto start = std::chrono::high_resolution_clock::now();
 
             try {
-                std::cout << "📦 JSON size: " << buffer.size() << " bytes\n" << std::flush; // Вывод размера JSON
+                std::cout << "📦 JSON size: " << buffer.size() << " bytes\n" << std::flush;
                 auto doc = parser.iterate(buffer);
                 int64_t ts = doc["ts"].get_int64();
                 auto data = doc["data"].get_array();
 
-                size_t trade_count = 0; // Подсчёт количества сделок
+                size_t trade_count = 0;
                 for (auto trade : data) trade_count++;
                 std::cout << "📊 Trade count: " << trade_count << "\n" << std::flush;
+
+                // Переключение буферов, если активный полон
+                {
+                    std::lock_guard<std::mutex> swapLock(swapMutex);
+                    if (active_buffer->size() + trade_count > BUFFER_CAPACITY) {
+                        std::swap(active_buffer, inactive_buffer);
+                        inactive_buffer->clear(); // Очистка неактивного буфера для будущей обработки
+                    }
+                }
 
                 for (auto trade : data) {
                     Trade t;
                     t.ts = ts;
                     t.s = std::string(trade["s"].get_string().value());
                     t.S = std::string(trade["S"].get_string().value());
-                    t.v = std::stod(std::string(trade["v"].get_string().value()));
-                    t.p = std::stod(std::string(trade["p"].get_string().value()));
+                    t.v = std::string(trade["v"].get_string().value()); // Оставляем как строку
+                    t.p = std::string(trade["p"].get_string().value()); // Оставляем как строку
+                    // Закомментируем std::stod для теста
+                    // t.v = std::stod(std::string(trade["v"].get_string().value()));
+                    // t.p = std::stod(std::string(trade["p"].get_string().value()));
                     t.BT = trade["BT"].type() == simdjson::ondemand::json_type::boolean
                         ? std::optional<bool>(trade["BT"].get_bool())
                         : std::nullopt;
@@ -131,7 +139,8 @@ void parse_buffer() {
                         ? std::optional<bool>(trade["RPI"].get_bool())
                         : std::nullopt;
 
-                    parsedTrades.push_back(t);
+                    std::lock_guard<std::mutex> swapLock(swapMutex);
+                    active_buffer->push_back(t);
                 }
 
                 auto end = std::chrono::high_resolution_clock::now();
@@ -194,8 +203,6 @@ int main() {
 
     wsThread.join();
     parserThread.join();
-
-    save_trades_to_log();
 
     std::cout << "✅ Program exited cleanly\n" << std::flush;
     return 0;
