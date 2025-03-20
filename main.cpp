@@ -1,11 +1,8 @@
-
 #include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 #include <simdjson.h>
-#include <boost/circular_buffer.hpp>
 #include <iostream>
 #include <ostream>
-#include <fstream>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -13,39 +10,45 @@
 #include <atomic>
 #include <optional>
 #include <string>
-#include <vector>
+#include <array>
+#include <cstring>
 
 typedef websocketpp::client<websocketpp::config::asio_client> client;
 client c;
 
-// Структура для хранения данных сделок (без преобразования v и p в double)
-struct Trade {
-    int64_t ts;
-    std::string s;
-    std::string S;
-    std::string v; // Оставляем как строку
-    std::string p; // Оставляем как строку
-    std::optional<bool> BT;
-    std::optional<bool> RPI;
+// Структура для хранения данных одной сделки (выравнивание для оптимизации)
+struct alignas(64) Trade {
+    char s[12];  // Symbol name, 12 байт
+    char S[4];   // Side (Buy/Sell), 4 байта
+    char v[16];  // Trade size, 16 байт
+    char p[16];  // Trade price, 16 байт
+    bool BT;     // Block trade, 1 байт
+    bool RPI;    // RPI trade, 1 байт
+    char padding[10]; // Выравнивание до 64 байт (12+4+16+16+1+1+10=60+4=64)
 };
 
-// Кольцевой буфер для входящих сообщений
-constexpr size_t RING_BUFFER_SIZE = 10;
-boost::circular_buffer<simdjson::padded_string> ringBuffer(RING_BUFFER_SIZE);
+// Структура буфера: ts + массив сделок
+struct Buffer {
+    int64_t ts;                         // Временная метка сообщения
+    std::array<Trade, 512> trades;      // Массив на 512 сделок
+    size_t size = 0;                    // Количество заполненных сделок
+};
 
-// Два кольцевых буфера для двойного буферирования (ёмкость 300 элементов каждый)
-constexpr size_t BUFFER_CAPACITY = 300;
-boost::circular_buffer<Trade> buffer1(BUFFER_CAPACITY);
-boost::circular_buffer<Trade> buffer2(BUFFER_CAPACITY);
-
-// Указатель на активный буфер для записи
-boost::circular_buffer<Trade>* active_buffer = &buffer1;
-boost::circular_buffer<Trade>* inactive_buffer = &buffer2;
+// Два статических буфера
+Buffer buffer1;
+Buffer buffer2;
+std::atomic<bool> use_buffer1{true}; // Переключатель между буферами
 
 std::mutex bufferMutex;
 std::condition_variable bufferCV;
 std::atomic<bool> running{true};
-std::mutex swapMutex; // Для переключения буферов
+
+// Кольцевой буфер для входящих сообщений
+constexpr size_t RING_BUFFER_SIZE = 10;
+std::array<simdjson::padded_string, RING_BUFFER_SIZE> ringBuffer;
+size_t ringBuffer_head = 0;
+size_t ringBuffer_tail = 0;
+std::atomic<size_t> ringBuffer_count{0};
 
 void print_simdjson_info() {
     std::cout << "✅ simdjson is using: " 
@@ -63,11 +66,13 @@ void signal_handler(int signal) {
 
 void write_to_buffer(const std::string& data) {
     std::unique_lock<std::mutex> lock(bufferMutex);
-    if (ringBuffer.full()) {
+    if (ringBuffer_count.load() >= RING_BUFFER_SIZE) {
         std::cerr << "⚠ Warning: Ring buffer is full, dropping data!\n" << std::flush;
         return;
     }
-    ringBuffer.push_back(simdjson::padded_string(data));
+    ringBuffer[ringBuffer_tail] = simdjson::padded_string(data);
+    ringBuffer_tail = (ringBuffer_tail + 1) % RING_BUFFER_SIZE;
+    ringBuffer_count.fetch_add(1);
     lock.unlock();
     std::cout << "📥 Data added to buffer\n" << std::flush;
     bufferCV.notify_one();
@@ -82,9 +87,9 @@ void parse_buffer() {
 
     while (running.load()) {
         std::unique_lock<std::mutex> lock(bufferMutex);
-        bufferCV.wait(lock, [] { return !ringBuffer.empty() || !running.load(); });
+        bufferCV.wait(lock, [] { return ringBuffer_count.load() > 0 || !running.load(); });
 
-        if (!running.load() && ringBuffer.empty()) {
+        if (!running.load() && ringBuffer_count.load() == 0) {
             std::cout << "🏁 Parser thread exiting\n" << std::flush;
             if (message_count > 0) {
                 std::cout << "⏱ Total parsing time (active): " << total_parsing_time << " microseconds (" 
@@ -96,9 +101,10 @@ void parse_buffer() {
             break;
         }
 
-        if (!ringBuffer.empty()) {
-            simdjson::padded_string buffer = std::move(ringBuffer.front());
-            ringBuffer.pop_front();
+        if (ringBuffer_count.load() > 0) {
+            simdjson::padded_string buffer = std::move(ringBuffer[ringBuffer_head]);
+            ringBuffer_head = (ringBuffer_head + 1) % RING_BUFFER_SIZE;
+            ringBuffer_count.fetch_sub(1);
             lock.unlock();
 
             auto start = std::chrono::high_resolution_clock::now();
@@ -113,34 +119,48 @@ void parse_buffer() {
                 for (auto trade : data) trade_count++;
                 std::cout << "📊 Trade count: " << trade_count << "\n" << std::flush;
 
-                // Переключение буферов, если активный полон
-                {
-                    std::lock_guard<std::mutex> swapLock(swapMutex);
-                    if (active_buffer->size() + trade_count > BUFFER_CAPACITY) {
-                        std::swap(active_buffer, inactive_buffer);
-                        inactive_buffer->clear(); // Очистка неактивного буфера для будущей обработки
+                if (use_buffer1.load()) {
+                    if (buffer1.size + trade_count > buffer1.trades.size()) {
+                        use_buffer1 = false;
+                        buffer2.size = 0;
+                    }
+                } else {
+                    if (buffer2.size + trade_count > buffer2.trades.size()) {
+                        use_buffer1 = true;
+                        buffer1.size = 0;
                     }
                 }
 
-                for (auto trade : data) {
-                    Trade t;
-                    t.ts = ts;
-                    t.s = std::string(trade["s"].get_string().value());
-                    t.S = std::string(trade["S"].get_string().value());
-                    t.v = std::string(trade["v"].get_string().value()); // Оставляем как строку
-                    t.p = std::string(trade["p"].get_string().value()); // Оставляем как строку
-                    // Закомментируем std::stod для теста
-                    // t.v = std::stod(std::string(trade["v"].get_string().value()));
-                    // t.p = std::stod(std::string(trade["p"].get_string().value()));
-                    t.BT = trade["BT"].type() == simdjson::ondemand::json_type::boolean
-                        ? std::optional<bool>(trade["BT"].get_bool())
-                        : std::nullopt;
-                    t.RPI = trade["RPI"].type() == simdjson::ondemand::json_type::boolean
-                        ? std::optional<bool>(trade["RPI"].get_bool())
-                        : std::nullopt;
+                Buffer& target_buffer = use_buffer1.load() ? buffer1 : buffer2;
+                target_buffer.ts = ts;
 
-                    std::lock_guard<std::mutex> swapLock(swapMutex);
-                    active_buffer->push_back(t);
+                for (auto trade : data) {
+                    Trade& t = target_buffer.trades[target_buffer.size];
+                    std::string_view s_sv = trade["s"].get_string().value();
+                    std::string_view S_sv = trade["S"].get_string().value();
+                    std::string_view v_sv = trade["v"].get_string().value();
+                    std::string_view p_sv = trade["p"].get_string().value();
+
+                    size_t s_len = std::min(s_sv.size(), sizeof(t.s) - 1);
+                    memcpy(t.s, s_sv.data(), s_len);
+                    t.s[s_len] = '\0';
+
+                    size_t S_len = std::min(S_sv.size(), sizeof(t.S) - 1);
+                    memcpy(t.S, S_sv.data(), S_len);
+                    t.S[S_len] = '\0';
+
+                    size_t v_len = std::min(v_sv.size(), sizeof(t.v) - 1);
+                    memcpy(t.v, v_sv.data(), v_len);
+                    t.v[v_len] = '\0';
+
+                    size_t p_len = std::min(p_sv.size(), sizeof(t.p) - 1);
+                    memcpy(t.p, p_sv.data(), p_len);
+                    t.p[p_len] = '\0';
+
+                    t.BT = (trade["BT"].type() == simdjson::ondemand::json_type::boolean) && trade["BT"].get_bool();
+                    t.RPI = (trade["RPI"].type() == simdjson::ondemand::json_type::boolean) && trade["RPI"].get_bool();
+
+                    target_buffer.size++;
                 }
 
                 auto end = std::chrono::high_resolution_clock::now();
