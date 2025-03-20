@@ -136,6 +136,7 @@ void parse_buffer() {
 
                 for (auto trade : data) {
                     Trade& t = target_buffer.trades[target_buffer.size];
+
                     std::string_view s_sv = trade["s"].get_string().value();
                     std::string_view S_sv = trade["S"].get_string().value();
                     std::string_view v_sv = trade["v"].get_string().value();
