@@ -98,6 +98,8 @@ set(CMAKE_MAKEFILE_DEPENDS
   "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/Compiler/XL-CXX-DetermineCompiler.cmake"
   "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/Compiler/XLClang-CXX-DetermineCompiler.cmake"
   "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/Compiler/zOS-CXX-DetermineCompiler.cmake"
+  "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/FindCUDA.cmake"
+  "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/FindCUDA/select_compute_arch.cmake"
   "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/FindPackageHandleStandardArgs.cmake"
   "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/FindPackageMessage.cmake"
   "/usr/local/cmake-3.30.0-linux-x86_64/share/cmake-3.30/Modules/FindThreads.cmake"

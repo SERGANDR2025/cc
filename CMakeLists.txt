@@ -25,10 +25,14 @@ add_definitions(-DSIMDJSON_ENABLE_AVX2=ON)
 add_definitions(-DSIMDJSON_USE_HASWELL=1)
 
 # Поиск зависимостей
+find_package(CUDA REQUIRED)
 find_package(websocketpp CONFIG REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system random)
 find_package(simdjson CONFIG REQUIRED)
 find_package(TBB REQUIRED)
+
+# Включаем директории CUDA
+include_directories(${CUDA_INCLUDE_DIRS})
 
 # Создаём исполняемый файл
 add_executable(CryptoWebSocket main.cpp)
@@ -40,4 +44,5 @@ target_link_libraries(CryptoWebSocket PRIVATE
     Boost::random 
     simdjson::simdjson 
     TBB::tbb
+    ${CUDA_LIBRARIES}
 )

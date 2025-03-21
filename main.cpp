@@ -12,11 +12,12 @@
 #include <string>
 #include <array>
 #include <cstring>
+#include "concurrentqueue.h"
 
 typedef websocketpp::client<websocketpp::config::asio_client> client;
 client c;
 
-// Структура для хранения данных одной сделки (выравнивание для оптимизации)
+// Структура для хранения данных одной сделки (выравнивание)
 struct alignas(64) Trade {
     char s[12];  // Symbol name, 12 байт
     char S[4];   // Side (Buy/Sell), 4 байта
@@ -29,26 +30,28 @@ struct alignas(64) Trade {
 
 // Структура буфера: ts + массив сделок
 struct Buffer {
-    int64_t ts;                         // Временная метка сообщения
+    int64_t ts = 0;                     // Временная метка сообщения
     std::array<Trade, 512> trades;      // Массив на 512 сделок
     size_t size = 0;                    // Количество заполненных сделок
+    bool ready = false;                 // Флаг готовности буфера
+
+    void clean() {
+        ts = 0;
+        size = 0;
+        ready = false;
+        std::fill(trades.begin(), trades.end(), Trade{});
+    }
 };
 
-// Два статических буфера
+// Три буфера на CPU
 Buffer buffer1;
 Buffer buffer2;
-std::atomic<bool> use_buffer1{true}; // Переключатель между буферами
-
-std::mutex bufferMutex;
-std::condition_variable bufferCV;
+Buffer buffer3;
+std::atomic<int> state{0}; // Счётчик состояния (0, 1, 2)
+std::mutex stateMutex;
+std::condition_variable cv; // Условная переменная для синхронизации
 std::atomic<bool> running{true};
-
-// Кольцевой буфер для входящих сообщений
-constexpr size_t RING_BUFFER_SIZE = 10;
-std::array<simdjson::padded_string, RING_BUFFER_SIZE> ringBuffer;
-size_t ringBuffer_head = 0;
-size_t ringBuffer_tail = 0;
-std::atomic<size_t> ringBuffer_count{0};
+moodycamel::ConcurrentQueue<std::string> messageQueue;
 
 void print_simdjson_info() {
     std::cout << "✅ simdjson is using: " 
@@ -60,121 +63,173 @@ void print_simdjson_info() {
 void signal_handler(int signal) {
     std::cout << "\n⚠ Received signal " << signal << ", stopping...\n" << std::flush;
     running = false;
-    bufferCV.notify_all();
     c.stop();
+    cv.notify_all(); // Разбудить все ждущие потоки при остановке
 }
 
 void write_to_buffer(const std::string& data) {
-    std::unique_lock<std::mutex> lock(bufferMutex);
-    if (ringBuffer_count.load() >= RING_BUFFER_SIZE) {
-        std::cerr << "⚠ Warning: Ring buffer is full, dropping data!\n" << std::flush;
-        return;
+    messageQueue.enqueue(data);
+    std::cout << "📥 Data added to queue\n" << std::flush;
+}
+
+// Функция чтения буфера
+void read_buffer(Buffer& buffer) {
+    if (buffer.size > 0 && buffer.ready) {
+        std::cout << "📖 Read " << buffer.size << " trades from buffer (ts: " << buffer.ts << ")\n" << std::flush;
+        buffer.ready = false; // Сбрасываем флаг после чтения
+    } else {
+        std::cout << "⚠ Buffer not ready or empty (size: " << buffer.size << ", ready: " << buffer.ready << ")\n" << std::flush;
     }
-    ringBuffer[ringBuffer_tail] = simdjson::padded_string(data);
-    ringBuffer_tail = (ringBuffer_tail + 1) % RING_BUFFER_SIZE;
-    ringBuffer_count.fetch_add(1);
-    lock.unlock();
-    std::cout << "📥 Data added to buffer\n" << std::flush;
-    bufferCV.notify_one();
 }
 
 void parse_buffer() {
     std::cout << "🚀 Parser thread started\n" << std::flush;
     simdjson::ondemand::parser parser;
 
-    long long total_parsing_time = 0;
-    int message_count = 0;
-
-    while (running.load()) {
-        std::unique_lock<std::mutex> lock(bufferMutex);
-        bufferCV.wait(lock, [] { return ringBuffer_count.load() > 0 || !running.load(); });
-
-        if (!running.load() && ringBuffer_count.load() == 0) {
-            std::cout << "🏁 Parser thread exiting\n" << std::flush;
-            if (message_count > 0) {
-                std::cout << "⏱ Total parsing time (active): " << total_parsing_time << " microseconds (" 
-                          << total_parsing_time / 1000.0 << " ms)\n" << std::flush;
-                std::cout << "⏱ Average time per message: " << total_parsing_time / message_count << " microseconds\n" << std::flush;
-            } else {
-                std::cout << "⏱ No messages parsed\n" << std::flush;
-            }
-            break;
+    while (running.load() || !messageQueue.size_approx() == 0) {
+        std::string message;
+        if (!messageQueue.try_dequeue(message)) {
+            if (!running.load()) break;
+            std::this_thread::sleep_for(std::chrono::microseconds(100)); // Ждём сообщения
+            continue;
         }
 
-        if (ringBuffer_count.load() > 0) {
-            simdjson::padded_string buffer = std::move(ringBuffer[ringBuffer_head]);
-            ringBuffer_head = (ringBuffer_head + 1) % RING_BUFFER_SIZE;
-            ringBuffer_count.fetch_sub(1);
-            lock.unlock();
+        auto start = std::chrono::high_resolution_clock::now();
+        auto doc = parser.iterate(message);
+        int64_t ts = doc["ts"].get_int64();
+        auto data = doc["data"].get_array();
 
-            auto start = std::chrono::high_resolution_clock::now();
+        std::unique_lock<std::mutex> lock(stateMutex);
+        int current_state = state.load();
+        Buffer* write_buffer = nullptr;
 
-            try {
-                std::cout << "📦 JSON size: " << buffer.size() << " bytes\n" << std::flush;
-                auto doc = parser.iterate(buffer);
-                int64_t ts = doc["ts"].get_int64();
-                auto data = doc["data"].get_array();
-
-                size_t trade_count = 0;
-                for (auto trade : data) trade_count++;
-                std::cout << "📊 Trade count: " << trade_count << "\n" << std::flush;
-
-                if (use_buffer1.load()) {
-                    if (buffer1.size + trade_count > buffer1.trades.size()) {
-                        use_buffer1 = false;
-                        buffer2.size = 0;
-                    }
-                } else {
-                    if (buffer2.size + trade_count > buffer2.trades.size()) {
-                        use_buffer1 = true;
-                        buffer1.size = 0;
-                    }
-                }
-
-                Buffer& target_buffer = use_buffer1.load() ? buffer1 : buffer2;
-                target_buffer.ts = ts;
-
-                for (auto trade : data) {
-                    Trade& t = target_buffer.trades[target_buffer.size];
-
-                    std::string_view s_sv = trade["s"].get_string().value();
-                    std::string_view S_sv = trade["S"].get_string().value();
-                    std::string_view v_sv = trade["v"].get_string().value();
-                    std::string_view p_sv = trade["p"].get_string().value();
-
-                    size_t s_len = std::min(s_sv.size(), sizeof(t.s) - 1);
-                    memcpy(t.s, s_sv.data(), s_len);
-                    t.s[s_len] = '\0';
-
-                    size_t S_len = std::min(S_sv.size(), sizeof(t.S) - 1);
-                    memcpy(t.S, S_sv.data(), S_len);
-                    t.S[S_len] = '\0';
-
-                    size_t v_len = std::min(v_sv.size(), sizeof(t.v) - 1);
-                    memcpy(t.v, v_sv.data(), v_len);
-                    t.v[v_len] = '\0';
-
-                    size_t p_len = std::min(p_sv.size(), sizeof(t.p) - 1);
-                    memcpy(t.p, p_sv.data(), p_len);
-                    t.p[p_len] = '\0';
-
-                    t.BT = (trade["BT"].type() == simdjson::ondemand::json_type::boolean) && trade["BT"].get_bool();
-                    t.RPI = (trade["RPI"].type() == simdjson::ondemand::json_type::boolean) && trade["RPI"].get_bool();
-
-                    target_buffer.size++;
-                }
-
-                auto end = std::chrono::high_resolution_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-                std::cout << "⏱ Parsing time for this message: " << duration << " microseconds\n" << std::flush;
-                total_parsing_time += duration;
-                message_count++;
-
-            } catch (const std::exception& e) {
-                std::cerr << "❌ Exception during parsing: " << e.what() << "\n" << std::flush;
-            }
+        switch (current_state) {
+            case 0: write_buffer = &buffer1; break;
+            case 1: write_buffer = &buffer2; break;
+            case 2: write_buffer = &buffer3; break;
         }
+
+        write_buffer->ts = ts;
+        write_buffer->size = 0;
+        for (auto trade : data) {
+            Trade& t = write_buffer->trades[write_buffer->size];
+            std::string_view s_sv = trade["s"].get_string().value();
+            std::string_view S_sv = trade["S"].get_string().value();
+            std::string_view v_sv = trade["v"].get_string().value();
+            std::string_view p_sv = trade["p"].get_string().value();
+
+            size_t s_len = std::min(s_sv.size(), sizeof(t.s) - 1);
+            memcpy(t.s, s_sv.data(), s_len);
+            t.s[s_len] = '\0';
+
+            size_t S_len = std::min(S_sv.size(), sizeof(t.S) - 1);
+            memcpy(t.S, S_sv.data(), S_len);
+            t.S[S_len] = '\0';
+
+            size_t v_len = std::min(v_sv.size(), sizeof(t.v) - 1);
+            memcpy(t.v, v_sv.data(), v_len);
+            t.v[v_len] = '\0';
+
+            size_t p_len = std::min(p_sv.size(), sizeof(t.p) - 1);
+            memcpy(t.p, p_sv.data(), p_len);
+            t.p[p_len] = '\0';
+
+            t.BT = (trade["BT"].type() == simdjson::ondemand::json_type::boolean) && trade["BT"].get_bool();
+            t.RPI = (trade["RPI"].type() == simdjson::ondemand::json_type::boolean) && trade["RPI"].get_bool();
+
+            write_buffer->size++;
+        }
+        write_buffer->ready = true;
+
+        std::cout << "📝 Wrote " << write_buffer->size << " trades to buffer " << current_state + 1 << " (ts: " << ts << ")\n" << std::flush;
+
+        auto end = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
+        std::cout << "⏱ Parsing time for this message: " << duration << " microseconds\n" << std::flush;
+
+        // Переключение состояния только после парсинга и уведомление manage_buffers
+        state.store((current_state + 1) % 3);
+        lock.unlock();
+        cv.notify_one(); // Уведомляем manage_buffers о завершении парсинга
     }
+    std::cout << "🏁 Parser thread exiting\n" << std::flush;
+}
+
+void manage_buffers() {
+    std::cout << "🚀 Buffer management thread started\n" << std::flush;
+    while (running.load()) {
+        std::unique_lock<std::mutex> lock(stateMutex);
+
+        // Ждём, пока парсер завершит работу и уведомит нас
+        cv.wait(lock, [] { return buffer1.ready || buffer2.ready || buffer3.ready || !running.load(); });
+
+        if (!running.load()) break;
+
+        int current_state = state.load();
+        Buffer* clean_buffer = nullptr;
+        Buffer* buffer_to_read = nullptr;
+
+        switch (current_state) {
+            case 0:
+                clean_buffer = &buffer2;
+                buffer_to_read = &buffer3;
+                break;
+            case 1:
+                clean_buffer = &buffer3;
+                buffer_to_read = &buffer1;
+                break;
+            case 2:
+                clean_buffer = &buffer1;
+                buffer_to_read = &buffer2;
+                break;
+        }
+
+        read_buffer(*buffer_to_read); // Читаем буфер и сбрасываем ready
+        clean_buffer->clean();        // Очищаем следующий буфер
+
+        lock.unlock();
+    }
+
+    std::cout << "Buffer 1 (size: " << buffer1.size << "):\n";
+    if (buffer1.size > 0) {
+        std::cout << "  ts: " << buffer1.ts << "\n";
+        std::cout << "  s: " << buffer1.trades[0].s << "\n";
+        std::cout << "  S: " << buffer1.trades[0].S << "\n";
+        std::cout << "  v: " << buffer1.trades[0].v << "\n";
+        std::cout << "  p: " << buffer1.trades[0].p << "\n";
+        std::cout << "  BT: " << (buffer1.trades[0].BT ? "true" : "false") << "\n";
+        std::cout << "  RPI: " << (buffer1.trades[0].RPI ? "true" : "false") << "\n";
+    } else {
+        std::cout << "  Empty\n";
+    }
+
+    std::cout << "Buffer 2 (size: " << buffer2.size << "):\n";
+    if (buffer2.size > 0) {
+        std::cout << "  ts: " << buffer2.ts << "\n";
+        std::cout << "  s: " << buffer2.trades[0].s << "\n";
+        std::cout << "  S: " << buffer2.trades[0].S << "\n";
+        std::cout << "  v: " << buffer2.trades[0].v << "\n";
+        std::cout << "  p: " << buffer2.trades[0].p << "\n";
+        std::cout << "  BT: " << (buffer2.trades[0].BT ? "true" : "false") << "\n";
+        std::cout << "  RPI: " << (buffer2.trades[0].RPI ? "true" : "false") << "\n";
+    } else {
+        std::cout << "  Empty\n";
+    }
+
+    std::cout << "Buffer 3 (size: " << buffer3.size << "):\n";
+    if (buffer3.size > 0) {
+        std::cout << "  ts: " << buffer3.ts << "\n";
+        std::cout << "  s: " << buffer3.trades[0].s << "\n";
+        std::cout << "  S: " << buffer3.trades[0].S << "\n";
+        std::cout << "  v: " << buffer3.trades[0].v << "\n";
+        std::cout << "  p: " << buffer3.trades[0].p << "\n";
+        std::cout << "  BT: " << (buffer3.trades[0].BT ? "true" : "false") << "\n";
+        std::cout << "  RPI: " << (buffer3.trades[0].RPI ? "true" : "false") << "\n";
+    } else {
+        std::cout << "  Empty\n";
+    }
+
+    std::cout << "🏁 Buffer management thread exiting\n" << std::flush;
 }
 
 void on_message(websocketpp::connection_hdl, client::message_ptr msg) {
@@ -189,7 +244,6 @@ void websocket_thread() {
     } catch (const std::exception& e) {
         std::cerr << "❌ WebSocket error: " << e.what() << "\n" << std::flush;
         running = false;
-        bufferCV.notify_all();
     }
     std::cout << "🏁 WebSocket thread exiting\n" << std::flush;
 }
@@ -219,11 +273,13 @@ int main() {
     }
     c.connect(con);
 
-    std::thread parserThread(parse_buffer);
+    std::thread parseThread(parse_buffer);
+    std::thread manageThread(manage_buffers);
     std::thread wsThread(websocket_thread);
 
     wsThread.join();
-    parserThread.join();
+    parseThread.join();
+    manageThread.join();
 
     std::cout << "✅ Program exited cleanly\n" << std::flush;
     return 0;

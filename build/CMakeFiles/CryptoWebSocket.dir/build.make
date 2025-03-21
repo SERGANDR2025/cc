@@ -96,6 +96,8 @@ CryptoWebSocket: /usr/lib/x86_64-linux-gnu/libboost_system.so.1.83.0
 CryptoWebSocket: /usr/lib/x86_64-linux-gnu/libboost_random.so.1.83.0
 CryptoWebSocket: /usr/local/lib/libsimdjson.a
 CryptoWebSocket: /usr/lib/x86_64-linux-gnu/libtbb.so.12.11
+CryptoWebSocket: /usr/local/cuda-12.2/lib64/libcudart_static.a
+CryptoWebSocket: /usr/lib/x86_64-linux-gnu/librt.a
 CryptoWebSocket: CMakeFiles/CryptoWebSocket.dir/link.txt
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/sa/cc/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Linking CXX executable CryptoWebSocket"
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/CryptoWebSocket.dir/link.txt --verbose=$(VERBOSE)

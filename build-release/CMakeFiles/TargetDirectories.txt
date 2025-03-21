@@ -1,0 +1,3 @@
+/home/sa/cc/build-release/CMakeFiles/CryptoWebSocket.dir
+/home/sa/cc/build-release/CMakeFiles/edit_cache.dir
+/home/sa/cc/build-release/CMakeFiles/rebuild_cache.dir
